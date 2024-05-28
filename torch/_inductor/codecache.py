@@ -1360,6 +1360,24 @@ class VecAVX512(VecISA):
 
 
 @dataclasses.dataclass
+class VecAMX(VecAVX512):
+    _arch_flags = VecAVX512._arch_flags + " -mamx-tile -mamx-bf16 -mamx-int8"
+
+    def __str__(self) -> str:
+        return super().__str__() + " amx_tile"
+
+    __hash__: Callable[[VecISA], Any] = VecISA.__hash__
+
+    @functools.lru_cache(None)
+    def __bool__(self) -> bool:
+        if super().__bool__():
+            # TODO: check AMX validity
+            if torch._C._cpu._init_amx():
+                return True
+        return False
+
+
+@dataclasses.dataclass
 class VecAVX2(VecISA):
     _bit_width = 256
     _macro = "-DCPU_CAPABILITY_AVX2"
@@ -1401,7 +1419,7 @@ class InvalidVecISA(VecISA):
 
 
 invalid_vec_isa = InvalidVecISA()
-supported_vec_isa_list = [VecAVX512(), VecAVX2(), VecNEON()]
+supported_vec_isa_list = [VecAMX(), VecAVX512(), VecAVX2(), VecNEON()]
 
 
 # Cache the cpuinfo to avoid I/O overhead. Meanwhile, the cpuinfo content
@@ -1433,7 +1451,7 @@ def valid_vec_isa_list() -> List[VecISA]:
     with open("/proc/cpuinfo") as _cpu_info:
         _cpu_info_content = _cpu_info.read()
         for isa in supported_vec_isa_list:
-            if str(isa) in _cpu_info_content and isa:
+            if all(flag in _cpu_info_content for flag in str(isa).split()) and isa:
                 isa_list.append(isa)
         return isa_list
 
