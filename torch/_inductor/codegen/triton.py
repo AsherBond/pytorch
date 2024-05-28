@@ -1037,9 +1037,6 @@ class TritonKernel(SIMDKernel):
             and V.graph.sizevars.statically_known_geq(self.numels[-1], 256)  # type: ignore[arg-types]
         )
 
-    def generate_assert(self, check):
-        return torch.version.hip is None and super().generate_assert(check)
-
     @property
     def assert_function(self) -> str:
         return "tl.device_assert"
@@ -1210,20 +1207,34 @@ class TritonKernel(SIMDKernel):
         value = f"{value}.to({triton_store_type(V.graph.get_dtype(name))})"
         return f"tl.store({block_ptr}, {value}{other})"
 
-    def load_mask(self, var):
-        mask = ""
-        mask_vars = set(var.mask_vars)
-        if self._load_mask:
-            mask_vars.add(self._load_mask)
+    def check_bounds(
+        self,
+        expr: sympy.Expr,
+        size: sympy.Expr,
+        lower: bool,
+        upper: bool,
+    ):
+        if not (lower or upper):
+            return
 
-        if mask_vars:
-            mask = (
-                f"{next(iter(mask_vars))}"
-                if len(mask_vars) == 1
-                # sorted for deterministic order
-                else f"({' & '.join(sorted(map(str, mask_vars)))})"
-            )
-        return mask
+        assert isinstance(expr, sympy.Expr)
+        indexing = self.indexing(expr, block_ptr=False)
+        assert isinstance(indexing, IndexingOptions)
+
+        index_str = indexing.index_str
+        mask_str = indexing.mask_str if indexing.has_mask() else None
+        size_str = V.kernel.sexpr(self.rename_indexing(size)) if upper else None
+
+        # expr is already wrapped
+        line = self.indirect_assert(
+            index_str, "0" if lower else None, size_str, mask_str
+        )
+
+        indirect = self.is_indirect_indexing(expr) or any(
+            isinstance(m, TritonCSEVariable) for m in indexing.mask_vars
+        )
+        buffer = self.compute if indirect else self.indexing_code
+        self.cse.generate(buffer, line, assignment=False)
 
     def load(self, name: str, index: sympy.Expr):
         var = self.args.input(name)

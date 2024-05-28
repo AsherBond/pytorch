@@ -58,7 +58,7 @@ from torch.fx.experimental.symbolic_shapes import (
     SymTypes,
 )
 from torch.utils._sympy.functions import CleanDiv, FloorDiv, ModularIndexing
-from torch.utils._sympy.symbol import SymT
+from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from . import config, dependencies
 from .codegen.common import index_prevent_reordering
@@ -2747,6 +2747,8 @@ class FixedLayout(Layout):
             assert len(index) == len(self.stride) == len(self.size)
             result = self.offset
             for idx, stride, sz in zip(index, self.stride, self.size):
+                # If there is indirect indexing we have to perform the
+                # idx wrapping and check that 0 <= idx < 1 checks
                 if sz != 1:
                     result = result + idx * stride
             return result
@@ -8069,6 +8071,11 @@ class LoopBodyBlock:
                 index = add_index(index, "other")
                 return self._inner.index_expr(index, dtype)
 
+            def check_bounds(self, index, size, lower, upper):
+                index = add_index(index, "other")
+                size = add_index(size, "other")
+                return self._inner.check_bounds(index, size, lower, upper)
+
             def bucketize(
                 self,
                 values,
@@ -8163,7 +8170,7 @@ class LoopBodyBlock:
             CaptureIndexing(proxy_ops), self.body.var_ranges
         )
         if config.constant_and_index_propagation:
-            handler = IndexPropagation(handler)
+            handler = IndexPropagation(handler, self.body.var_ranges)
 
         with V.set_ops_handler(handler):
             # This indirection is just a cute way to get IndexPropagation to
